@@ -1,38 +1,62 @@
 from tqdm import tqdm
-import torch
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
-import pandas as pd
-from tqdm import tqdm
-import json
-import argparse
-import sys
-from datasets import Dataset, DatasetDict
-from torch.utils.data import DataLoader, Dataset
-import os
-import gc
-import math
+from utils.model_utils import *
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.distributed as dist
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from torch.amp import GradScaler, autocast
-from utils.model_utils import *
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from datasets import Dataset
 
-if name == "__main__":
+import pandas as pd
+
+import json
+import argparse
+import sys
+import os
+import gc
+import math
+
+#Helper functions for setting up distributed training
+def setup_ddp():
+    dist.init_process_group(backend="nccl")
+    local_rank = int(os.environ["LOCAL_RANK"])
+    torch.cuda.set_device(local_rank)
+    return local_rank
+
+def cleanup_dpp():
+    dist.destroy_process_group()
+
+#Helper function to parse arguments
+def parse_args():
     #1. PARSE ARGS
-    parser = argparse.ArgumentParser(description="Arguments: datapath (required), model_name (required), method (optional)")
-    parser.add_argument("datapath", help="Path of tokenized dataset")
-    parser.add_argument("model_name", help="Name of model from huggingface")
-    parser.add_argument("method", help="Method: hierarchical. Default is concat")
+    parser = argparse.ArgumentParser(description="Arguments: datapath (required), model_name (optional), method (optional)")
+    parser.add_argument("--datapath", type=str, required=True, help="Path of tokenized dataset")
+    parser.add_argument("--model_name", type=str, default="mental/mental-bert-base-uncased",help="Name of model from huggingface")
+    parser.add_argument("--method", type=str, default='concat',help="Method: hierarchical. Default is concat")
     args = parser.parse_args()
-    if len(sys.argv) < 2:
-        parser.error("Required arguments not provided")
+
+    return args
+
+def gather_tensor(tensor):
+    gathered = [torch.zeros_like(tensor) for _ in range(dist.get_world_size())]
+    dist.all_gather(gathered, tensor)
+    return torch.cat(gathered, dim=0)
+
+def main(): 
+    #Run ddp setup
+    local_rank = setup_ddp()
+    rank = dist.get_rank()
+    args = parse_args()
 
     #For convinience ...
-    MODEL_NAME = model_name
+    MODEL_NAME = args.model_name
 
     #Load tokenized data
-    dataset = Dataset.load_from_disk(datapath)
+    dataset = Dataset.load_from_disk(args.datapath)
     dataset.set_format(type='torch')
 
     dataset = dataset.class_encode_column('labels')
@@ -47,12 +71,12 @@ if name == "__main__":
     test_dataset = train_val['train']
 
     # Device setup
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
 
     if args.method == 'hierarchical':
         collate_fn = collate_fn_pooling
         compute_metrics = compute_metrics_pooling
-        model = BERTGroupClassifier(model_name=MODEL_NAME, num_labels=1).to(device)
+        model = BERTGroupClassifier(model_name=MODEL_NAME, num_labels=1)
         model.bert.gradient_checkpointing_enable()  # Enable gradient checkpointing
         for param in model.bert.parameters():
             param.requires_grad = False
@@ -76,37 +100,45 @@ if name == "__main__":
 
 
     # DataLoaders
+    train_sampler = DistributedSampler(train_dataset, shuffle=True);
+    val_sampler = DistributedSampler(val_dataset, shuffle=True);
+    test_sampler = DistributedSampler(test_dataset, shuffle=False);
+    
     train_loader = DataLoader(
                 train_dataset,
-                    batch_size=BATCH_SIZE,
-                        collate_fn=collate_fn,
-                            shuffle=True
+                batch_size=BATCH_SIZE,
+                collate_fn=collate_fn,
+                sampler=train_sampler
                             )
+
     val_loader = DataLoader(
                 val_dataset,
-                    batch_size=BATCH_SIZE,
-                        collate_fn=collate_fn,
-                            shuffle=False
+                batch_size=BATCH_SIZE,
+                collate_fn=collate_fn,
+                sampler=val_sampler
                             )
+
     test_loader = DataLoader(
                 test_dataset,
-                    batch_size=BATCH_SIZE,
-                        collate_fn=collate_fn,
-                            shuffle=False
+                batch_size=BATCH_SIZE,
+                collate_fn=collate_fn,
+                sampler=test_sampler
                             )
     # Specify your directories
-    
-    EXPERIMENT_NAME = datapath.split("/")[-1].split('.')[0]
-    output_dir = f"./output_{model_name}_{EXPERIMENT_NAME}"
-    logging_dir = f"./logs_{model_name}_{EXPERIMENT_NAME}"
+    if rank == 0:
+        EXPERIMENT_NAME = args.datapath.split("/")[-1].split('.')[0]
+        output_dir = f"./outputs/output_{MODEL_NAME}_{EXPERIMENT_NAME}"
+        logging_dir = f"./outputs/logs_{MODEL_NAME}_{EXPERIMENT_NAME}"
+        os.makedirs(output_dir, exist_ok=True)  # Create output directory if it doesn't exist
+        os.makedirs(logging_dir, exist_ok=True)  # Create logging directory if it doesn't exist
 
-    os.makedirs(output_dir, exist_ok=True)  # Create output directory if it doesn't exist
-    os.makedirs(logging_dir, exist_ok=True)  # Create logging directory if it doesn't exist
     train_losses = []
     val_losses = []
 
     # Model, optimizer, scaler
-    model = nn.DataParallel(model)
+    model.to(device) 
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
+
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
     scaler = GradScaler('cuda',enabled=True)
     best_f1 = 0.0
@@ -114,20 +146,23 @@ if name == "__main__":
     # Training loop
     for epoch in range(1, NUM_EPOCHS + 1):
         model.train()
+        train_loader.sampler.set_epoch(epoch)
         optimizer.zero_grad()
         running_loss = 0.0
         all_preds, all_labels = [], []
-        steps_per_update = math.ceil(len(train_loader) / ACCUMULATION_STEPS)
-        pbar = tqdm(total=steps_per_update, desc=f"Epoch {epoch}", dynamic_ncols=True,position=0,leave=False)
+        if rank == 0:
+            steps_per_update = math.ceil(len(train_loader) / ACCUMULATION_STEPS)
+            pbar = tqdm(total=steps_per_update, desc=f"Epoch {epoch}", dynamic_ncols=True,position=0,leave=False)
+
         for step, batch in enumerate(train_loader, 1):
             input_ids = batch['input_ids'].to(device)
             attention_mask = batch['attention_mask'].to(device)
             labels = batch['labels'].to(device)
             with autocast('cuda',enabled=True):
-                loss, logits = model(input_ids=input_ids,
-                attention_mask=attention_mask,
-            labels=labels)
-            loss = loss.mean()
+                outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+                loss = outputs.loss
+                logits = outputs.logits
+                loss = loss.mean()
 
             # Backpropagate
             scaler.scale(loss).backward()
@@ -142,77 +177,95 @@ if name == "__main__":
                 scaler.update()
                 optimizer.zero_grad()
                 running_loss += loss.item()
-                pbar.update(1)
-                pbar.set_postfix(loss=running_loss / pbar.n)
+                if rank==0:
+                    pbar.update(1)
+                    pbar.set_postfix(loss=running_loss / pbar.n)
+
+        if rank==0:
+            pbar.close()
+
         train_losses.append(running_loss / step)
-        pbar.close()
+        train_loss_tensor = torch.tensor([running_loss/step],device=device)
+        dist.all_reduce(train_loss_tensor,op=dist.ReduceOp.SUM)
+        train_loss_avg = train_loss_tensor.item()/dist.get_world_size()
+        if rank == 0:
+            train_losses.append(train_loss_avg)
 
         # Validation
         model.eval()
         val_logits_list, val_labels_list = [], []
         val_loss = 0.0
         with torch.no_grad():
-            for step,batch in tqdm(enumerate(val_loader), desc="  Val", leave=False,position=0):
+            if rank==0:
+                    pbar = tqdm(enumerate(val_loader), desc="Val", leave=False,position=0)
+            for step,batch in enumerate(val_loader):
                 input_ids = batch['input_ids'].to(device)
                 attention_mask = batch['attention_mask'].to(device)
                 labels = batch['labels'].to(device)
                 with autocast('cuda',enabled=True):
-                    loss, logits = model(input_ids=input_ids,
-                                         attention_mask=attention_mask,
-                                         labels=labels)
+                    outputs= model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+                    logits = outputs.logits
+                    loss = outputs.loss
                     loss = loss.mean()
                 val_loss += loss.item()
                 val_logits_list.append(logits.detach())
                 val_labels_list.append(labels.detach())
             val_logits = torch.cat(val_logits_list)
+            val_logits = gather_tensor(val_logits)
             val_labels = torch.cat(val_labels_list)
-            val_metrics = compute_metrics(val_logits, val_labels)
-            metrics_history.append(val_metrics)
-            print(f"Epoch {epoch} {val_loss} Validation Metrics: {val_metrics}")
+            val_labels = gather_tensor(val_labels)
+            if rank == 0:
+                val_metrics = compute_metrics(val_logits, val_labels)
+                metrics_history.append(val_metrics)
+                print(f"Epoch {epoch} {val_loss} Validation Metrics: {val_metrics}")
 
-            # Save best model
-            if val_metrics['f1'] > best_f1:
-                best_f1 = val_metrics['f1']
-                state_dict = model.module.state_dict() if hasattr(model, 'module') else model.state_dict()
-                torch.save(state_dict, os.path.join(output_dir, 'best_model.pth'))
-                print(f"Saved best model (F1={best_f1:.4f})")
-            val_losses.append(val_losses / step)
+                # Save best model
+                if val_metrics['f1'] > best_f1:
+                    best_f1 = val_metrics['f1']
+                    state_dict = model.module.state_dict() 
+                    torch.save(state_dict, os.path.join(output_dir, 'best_model.pth'))
+                    print(f"Saved best model (F1={best_f1:.4f})")
+                val_losses.append(val_loss / step)
         print("Training complete.")
 
     # Test loop
-    print("\nRunning test set evaluation...")
-    if args.method == 'hierarchical':
-        best_model = BERTGroupClassifier(model_name=MODEL_NAME, num_labels=1).to(device)
-    else:
-        model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME, num_labels=1).to(device)
-    best_model.load_state_dict(torch.load(os.path.join(output_dir, 'best_model.pth')))
-    best_model = nn.DataParallel(best_model)
-    best_model.eval()
-    test_logits_list, test_labels_list = [], []
-    with torch.no_grad():
-        for step,batch in tqdm(enumerate(test_loader), desc="  Test", leave=False,position=0):
-            input_ids = batch['input_ids'].to(device)
-            attention_mask = batch['attention_mask'].to(device)
-            labels = batch['labels'].to(device)
-            with autocast('cuda',enabled=True):
-                _, logits = best_model(input_ids=input_ids,
-                                       attention_mask=attention_mask,
-                                        labels=labels)
-            test_logits_list.append(logits.detach())
-            test_labels_list.append(labels.detach())
-        test_logits = torch.cat(test_logits_list)
-        test_labels = torch.cat(test_labels_list)
-        test_metrics = compute_metrics(test_logits, test_labels)
-        print(f"Test Metrics: {test_metrics}")
-        training_stats = {
-            "train_losses": train_losses,
-            "val_losses": val_losses,
-            "metrics": metrics_history,
-            "test_metrics": test_metrics,
-            "learning_rate": LEARNING_RATE,
-            "batch_size":BATCH_SIZE
-    }
+    if rank == 0:
+        print("\nRunning test set evaluation...")
+        if args.method == 'hierarchical':
+            best_model = BERTGroupClassifier(model_name=MODEL_NAME, num_labels=1).to(device)
+        else:
+            best_model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME, num_labels=2).to(device)
+        best_model.load_state_dict(torch.load(os.path.join(output_dir, 'best_model.pth')))
+        best_model = nn.DataParallel(best_model)
+        best_model.eval()
+        test_logits_list, test_labels_list = [], []
+        with torch.no_grad():
+            for step,batch in tqdm(enumerate(test_loader), desc="Test", leave=False,position=0):
+                input_ids = batch['input_ids'].to(device)
+                attention_mask = batch['attention_mask'].to(device)
+                labels = batch['labels'].to(device)
+                with autocast('cuda',enabled=True):
+                    outputs = best_model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+                    logits = outputs.logits
+                test_logits_list.append(logits.detach())
+                test_labels_list.append(labels.detach())
+            test_logits = torch.cat(test_logits_list)
+            test_labels = torch.cat(test_labels_list)
+            test_metrics = compute_metrics(test_logits, test_labels)
+            print(f"Test Metrics: {test_metrics}")
+            training_stats = {
+                "train_losses": train_losses,
+                "val_losses": val_losses,
+                "metrics": metrics_history,
+                "test_metrics": test_metrics,
+                "learning_rate": LEARNING_RATE,
+                "batch_size":BATCH_SIZE
+        }
 
-    with open(f'{logging_dir}/training_stats.json', 'w') as f:
-        json.dump(training_stats, f)
-        print(f"Training statistics saved to '{logging_dir}/training_stats.json'.")
+        with open(f'{logging_dir}/training_stats.json', 'w') as f:
+            json.dump(training_stats, f)
+            print(f"Training statistics saved to '{logging_dir}/training_stats.json'.")
+    dist.destroy_process_group()
+
+if __name__ == "__main__":
+    main()

@@ -1,10 +1,3 @@
-import torch
-import torch.nn as nn
-from transformers import AutoModel
-
-#Concat method provided as default in training script
-
-#Hierarchical method
 class BERTGroupClassifier(nn.Module):
     def __init__(self, model_name=MODEL_NAME, num_labels=1):
         super().__init__()

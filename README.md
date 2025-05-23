@@ -1,4 +1,4 @@
 # mci_depression_detection
-Scripts and Notebooks for MCI and Depression Detection with BERT
+Scripts and Notebooks for MCI and Depression Detection 
 
-- Scripts to be provided shortly...
+- Rough scripts added, will add repro scripts shortly

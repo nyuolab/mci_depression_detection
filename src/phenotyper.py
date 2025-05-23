@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 #Phenotyping script using ICD-10 codes
 #Current method: Check for existence of ICD-10 codes associated with MCI
 
-#DATA_PATHS TODO: Add your own paths here
-pt_msg_path = 
+#DATA_PATHS TODO: REMOVE for PUBLIC RELEASE
+pt_msg_path = "./data/pat_msgs.json"
 icd_subquery_1_path = 
 icd_subquery_2_path = 
 nyuqa_demo_path = 
@@ -42,8 +42,8 @@ pt_icds_2020_2024 = pt_icds_2020_2024.transpose()
 
 #Updating phenotype using all pulled data, starting with scraped icd data 
 #Using scraped ICDs to phenotype
-pt_icds_2020_2024['mci_codes'] = pt_icds_2020_2024.encounters.progress_apply(lambda x: [s for s in sum([ d['concatenated'] for d in x],[]) if re.search(mci_regex, s)])
-pt_icds_2020_2024['adrd_codes'] = pt_icds_2020_2024.encounters.progress_apply(lambda x: [s for s in sum([ d['concatenated'] for d in x],[]) if re.search(adrd_regex, s)])
+pt_icds_2020_2024['mci_codes'] = pt_icds_2020_2024.encounters.apply(lambda x: [s for s in sum([ d['concatenated'] for d in x],[]) if re.search(mci_regex, s)])
+pt_icds_2020_2024['adrd_codes'] = pt_icds_2020_2024.encounters.apply(lambda x: [s for s in sum([ d['concatenated'] for d in x],[]) if re.search(adrd_regex, s)])
 mci_cohort = pt_icds_2020_2024[(pt_icds_2020_2024.mci_codes.apply(len) != 0) | (pt_icds_2020_2024.adrd_codes.apply(len) != 0)]
 
 #Finding earliest date of diagnosis for later use
@@ -75,15 +75,15 @@ diag_data['mci_tf'] = diag_data['icd'].str.contains(mci_regex).fillna(False)
 diag_data['adrd_tf'] = diag_data['icd'].str.contains(adrd_regex).fillna(False)
 
 #Filtering for mci patients and getting raw times
-icd_subquery_1['mci'] = icd_subquery_1.apply(lambda x: 1 if (x.mci_tf_or_none == True or x.adrd_tf_or_none == True) else 0,axis=1)
+icd_subquery_1['mci'] = icd_subquery_1.apply(lambda x: 1 if (x.mci_tf == True or x.adrd_tf== True) else 0,axis=1)
 icd_subquery_1 = icd_subquery_1[icd_subquery_1.mci == 1][['pat_owner_id','startdatekey']]
 icd_subquery_1.rename({'startdatekey':'earliest_sign'},axis=1,inplace=True)
 
-icd_subquery_2['mci'] = icd_subquery_2.apply(lambda x: 1 if (x.mci_tf_or_none == True or x.adrd_tf_or_none == True) else 0,axis=1)
+icd_subquery_2['mci'] = icd_subquery_2.apply(lambda x: 1 if (x.mci_tf == True or x.adrd_tf == True) else 0,axis=1)
 icd_subquery_2 = icd_subquery_2[icd_subquery_2.mci == 1][['pat_owner_id','startdatekey']]
 icd_subquery_2.rename({'startdatekey':'earliest_sign'},axis=1,inplace=True)
 
-diag_data['mci'] = diag_data.apply(lambda x: 1 if (x.mci_tf_or_none == True or x.adrd_tf_or_none == True) else 0,axis=1)
+diag_data['mci'] = diag_data.apply(lambda x: 1 if (x.mci_tf == True or x.adrd_tf == True) else 0,axis=1)
 diag_data = diag_data[diag_data.mci == 1][['pat_owner_id','diagnosis_time']]
 diag_data = diag_data.groupby('pat_owner_id').agg(list).reset_index().rename({'diagnosis_time': 'earliest_sign'},axis=1)
 
@@ -103,4 +103,4 @@ all_times = pd.concat([icd_subquery_1,icd_subquery_2,diag_data,yifan_meds,mci_co
 all_times = all_times.groupby('pat_owner_id').agg(lambda x: min(list(x))).reset_index()
 
 #Output phenotype pt_ids with associated first times of diagnosis
-all_times.to_csv('mci_cohort_dates.csv')
+all_times.to_csv('./data/mci_cohort_dates.csv')

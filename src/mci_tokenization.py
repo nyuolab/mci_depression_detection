@@ -6,27 +6,42 @@ import numpy as np
 import re
 from datetime import datetime
 import pandas as pd
+import utils.config as tokenizer_config
+import os
+from tqdm import tqdm
+from transformers import AutoTokenizer
+tqdm.pandas()
 
-
-#TODO: Put your data paths here
-pt_msg_path = 
-mci_phenotype_path = 
+pt_msg_path = "./data/pat_msgs.json" #Created after running retrieve.sh
+mci_phenotype_path = './data/mci_cohort_dates.csv' #Created after running phenotyper.sh
 demographics_path = 
 
-if not name == "__main__":
+if not __name__ == "__main__":
     print("mci_tokenization.py is not a module!")
 
-if name == "__main__":
+if __name__ == "__main__":
     #1. PARSE ARGS
     #Get task type and method type (default is truncation)
     parser = argparse.ArgumentParser(description="Script requires at least one argument")
-    parser.add_argument('task_type', help='Task type argument (required)')
-    parser.add_argument('method', help="Method type (optional): hierarchical \nDefault is truncation")
-    parser.add_argument("model_name", help="Model name from huggingface. \n Default is mental-bert-base-uncased")
+    parser.add_argument('--task_type', type=int, help='Task type argument (required)')
+    parser.add_argument('--random_state', type=int, default=42, help="Seed for reproducibility.\n Default is 42")
+    parser.add_argument('--method', type=str, default='hierarchical', help="Method type (optional): hierarchical \nDefault is truncation")
+    parser.add_argument("--model_name", type=str, default="mental/mental-bert-base-uncased", help="Model name from huggingface. \n Default is mental/mental-bert-base-uncased")
     args = parser.parse_args()
     if len(sys.argv) == 1:
         parser.error("No arguments provided. Must specifiy task type to proceed")
 
+    #Choose model and load tokenizer
+    if(args.model_name):
+        MODEL_NAME = args.model_name
+    else:
+        MODEL_NAME = "mental/mental-bert-base-uncased"
+
+    os.environ['TOKENIZERS_PARALLELISM'] = "true"
+    
+    tokenizer_config.tokenizer=AutoTokenizer.from_pretrained(MODEL_NAME)
+
+    from utils.model_utils import *
     #Load patient message data
     df = pd.read_json(pt_msg_path)
     df = df[df.pat_to_doctor_msgs >= 1]
@@ -46,7 +61,7 @@ if name == "__main__":
         majority_class_undersampled = resample(majority_class,
                                                replace=False,
                                                n_samples=len(minority_class),
-                                               random_state=42)
+                                               random_state=args.random_state)
         balanced_data = pd.concat([majority_class_undersampled, minority_class])
 
         if(args.method == "hierarchical"):
@@ -58,14 +73,14 @@ if name == "__main__":
         labeled_df = balanced_data
 
     #TASK 2: MCI ONLY, Pre vs Post
-    if(args.task_type == 2)
+    if(args.task_type == 2):
         task2 = df[df.label == 1]
         mci_times = mci_cohort.drop('Unnamed: 0', axis=1).set_index('pat_owner_id').to_dict()
         mci_times = mci_times['earliest_sign']
         mci_times = {k: datetime.strptime(v, "%Y-%m-%d") for k, v in mci_times.items()}
 
-        task2['pre_mci'] = task2.apply(lambda row: extract(row['pat_owner_id'],row['refined_pat_encounters'],'before', mci_times),axis=1)
-        task2['post_mci'] = task2.apply(lambda row: extract(row['pat_owner_id'],row['refined_pat_encounters'],'after', mci_times),axis=1)
+        task2['pre_mci'] = task2.apply(lambda row: extract_before_and_after(row['pat_owner_id'],row['refined_pat_encounters'],'before', mci_times),axis=1)
+        task2['post_mci'] = task2.apply(lambda row: extract_before_and_after(row['pat_owner_id'],row['refined_pat_encounters'],'after', mci_times),axis=1)
         df_pre_mci = task2[task2.pre_mci.apply(len) > 0][['pat_owner_id','pre_mci']]
         df_pre_mci['label'] = 0
         df_post_mci = task2[task2.post_mci.apply(len) > 0][['pat_owner_id','post_mci']]
@@ -82,21 +97,12 @@ if name == "__main__":
 
         df_pre_and_post_labeled.reset_index(inplace=True)
         labeled_df = df_pre_and_post_labeled
+
     #3. TOKENIZATION
-
-    #Choose model and load tokenizer
-    if(args.model_name):
-        MODEL_NAME = args.model_name
-    else:
-        MODEL_NAME = "mental/mental-bert-base-uncased"
-
-    os.environ['TOKENIZERS_PARALLELISM'] = "true"
-    tokenizer=AutoTokenizer.from_pretrained(MODEL_NAME)
-
     if(args.method == "hierarchical"):
         labeled_df['tokenized'] = labeled_df['all_pt_messages'].apply(tokenize_chunks)
         dataset_dict = {
-                'input_ids': labeled_df['tokenized'].apply(lambda x: x['input_ids'].tolist()).tolist()
+                'input_ids': labeled_df['tokenized'].apply(lambda x: x['input_ids'].tolist()).tolist(),
                 'attention_mask': labeled_df['tokenized'].apply(lambda x: x['attention_mask'].tolist()).tolist(),
                 'labels': labeled_df['label'].tolist()
         }
@@ -111,11 +117,11 @@ if name == "__main__":
         for text_list in tqdm(texts):
             combined_text = ' [SEP] '.join(text_list)
             inputs = tokenizer.encode_plus(
-                    combined_text, add_special_tokens=True, max_length=max_len, 
+                    combined_text, add_special_tokens=True, max_length=512, 
                     padding='max_length', truncation=True, return_tensors='pt'
             )
-        tokenized_texts.append(inputs['input_ids'].squeeze().tolist())
-        attention_masks.append(inputs['attention_mask'].squeeze().tolist())
+            tokenized_texts.append(inputs['input_ids'].squeeze().tolist())
+            attention_masks.append(inputs['attention_mask'].squeeze().tolist())
         labels = list(labels)
         dataset_dict = {
                 'input_ids': tokenized_texts,
@@ -130,8 +136,8 @@ if name == "__main__":
             2: 'task_2',
             }
     if args.method == 'hierarchical':
-        save_path = f"./{MODEL_NAME}_tokenized_data_{switch[args.task_type]}_hierarchical"
+        save_path = f"./data/{MODEL_NAME}_tokenized_data_{switch[args.task_type]}_hierarchical"
     else:
-        save_path = f"./{MODEL_NAME}_tokenized_data_{switch[args.task_type]}_concat"
+        save_path = f"./data/{MODEL_NAME}_tokenized_data_{switch[args.task_type]}_concat"
 
     dataset.save_to_disk(save_path)

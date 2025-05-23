@@ -13,9 +13,12 @@ greeting_str =
 imposter_str = 
 flu_str = 
 pre_change_med_rq_regex = 
-post_2020_delimiter = 
+post_2020_delimiter =
 change_date = 
 
+def chunk_tasks(tasks, chunk_size):
+    for i in range(0, len(tasks), chunk_size):
+        yield tasks[i:i + chunk_size]
 
 def word_count(text):
     """
@@ -107,7 +110,7 @@ def process_pat_data(patient_id,patient_data):
                 #Check if before or after Epic formatting change (Currently identified as 2020-05-28)
 
                 #if after change, then use post-2020 regex to retrieve patient content
-                if datetime.strptime(pat_msg['timestamp'], "%Y-%m-%d %H:%M:%S").date() >= datetime.fromisoformat('2020-05-28').date():
+                if datetime.strptime(pat_msg['timestamp'], "%Y-%m-%d %H:%M:%S").date() >= change_date.date():
                     if any("Medication Renewal Request".lower() in s.lower().strip(r" \[\]\'")for s in subjects):
                         
                         try:

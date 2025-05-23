@@ -2,24 +2,18 @@ import pandas as pd
 import numpy as np
 import torch
 import os
-from tqdm import tqdm
-from nltk import sent_tokenize
-import torch.nn as nn
-from torch.utils.data import DataLoader, Dataset
-from torch.optim import AdamW
-import torch.optim as optim
+import re
 
-from transformers import AutoModel, AutoConfig, Trainer, TrainingArguments, AutoTokenizer,AutoModelForSequenceClassification, BertTokenizer, BertForSequenceClassification,get_linear_schedule_with_warmup
-from datasets import Dataset, DatasetDict
-from peft import LoraConfig, get_peft_model, TaskType, PeftModel, LoraConfig
+import json
+
+import torch.nn as nn
 
 from sklearn.metrics import f1_score, accuracy_score,roc_auc_score, recall_score, precision_score
 from sklearn.model_selection import train_test_split
 
-from torch_lr_finder import LRFinder, TrainDataLoaderIter
-
-import torch.nn as nn
-import json
+from nltk import sent_tokenize
+from utils.config import tokenizer
+from datetime import datetime
 
 def collate_fn_concat(batch):
     """
@@ -209,13 +203,13 @@ def extract_before_and_after(pt_id, enc_list, time_option, time_df):
     Output: list of dict
     """
 
-    if time_option != 'before' or time_option != 'after':
+    if time_option != 'before' and time_option != 'after':
         return None
     before = []
     enc_filtered = list(map(lambda d: 1 if datetime.strptime(d['first_msg_time'],"%Y-%m-%d %H:%M:%S") >= time_df[pt_id] else 0, enc_list))
     for i in range(len(enc_filtered)):
-        if time == "before" and enc_filtered[i] == 0:
+        if time_option == "before" and enc_filtered[i] == 0:
             before.append(enc_list[i])
-        elif time == "after" and enc_filtered[i] == 1:
+        elif time_option == "after" and enc_filtered[i] == 1:
             before.append(enc_list[i])
     return before
