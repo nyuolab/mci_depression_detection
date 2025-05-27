@@ -1,4 +1,8 @@
 # mci_depression_detection
 Scripts and Notebooks for MCI and Depression Detection 
 
-- Rough scripts added, will add repro scripts shortly
+- Run reproduction script:
+```bash
+chmod +x reproduction.sh
+./reproduction.sh
+```
