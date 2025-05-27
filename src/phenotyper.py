@@ -12,7 +12,6 @@ icd_subquery_2_path =
 nyuqa_demo_path = 
 diag_data_path = 
 scraped_icds_path = 
-qa_meds_path = 
 yifan_demo_path = 
 
 #regexes used TODO: Allow for generalized regex

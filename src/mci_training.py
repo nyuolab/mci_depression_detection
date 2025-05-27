@@ -1,5 +1,6 @@
 from tqdm import tqdm
 from utils.model_utils import *
+from utils.models import *
 
 import torch
 import torch.nn as nn
