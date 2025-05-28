@@ -8,12 +8,21 @@ from datetime import datetime
 #REGEXES for cleaning patient messages
 post_2020_med_rq_regex = 
 question_regex = 
-questionairre_str =
+questionairre_str = 
 greeting_str = 
+revised_greeting_str = 
+
 imposter_str = 
 flu_str = 
 pre_change_med_rq_regex = 
-post_2020_delimiter =
+post_2020_delimiter = 
+colon_regex_1 = 
+colon_regex_2 = 
+pediatrics_regex_2 = 
+pediatrics_regex_3 = 
+pediatrics_regex_1 = 
+pediatrics_regex_4 = 
+
 change_date = 
 
 def chunk_tasks(tasks, chunk_size):
@@ -127,7 +136,14 @@ def process_pat_data(patient_id,patient_data):
                         content = cleaning_algo_2020_2024(message['content'])
                         content = re.sub(greeting_str, "",re.sub(r"\s+", " ", content))
                         content = re.sub(flu_str, "", content)
-                        pat_msg['content'] = content
+                        content = re.sub(colon_regex_1, "", content) #colon_regex_1 is longer, try to get this first
+                        content = re.sub(colon_regex_2, "", content) #Also, will refactor later
+                        content = re.sub(pediatrics_regex_1, "", content)
+                        content = re.sub(pediatrics_regex_2, "", content)
+                        content = re.sub(pediatrics_regex_3, "", content)
+                        content = re.sub(pediatrics_regex_4, "", content)
+                        
+                        pat_msg['content'] = content.strip()
                         
                 #if before change, then use pre-2020 regex to retrieve patient content
                 else:
@@ -136,14 +152,21 @@ def process_pat_data(patient_id,patient_data):
                             content = re.search(pre_2020_med_rq_regex,message['content'],re.MULTILINE | re.IGNORECASE).group().strip()
                         except:
                             continue
-                        pat_msg['content'] = content
+                        pat_msg['content'] = content.strip()
                     elif any(questionairre_str.lower() in s.lower() for s in subjects): 
                         continue
                     else:
                         content = cleaning_algo_2015_2020(message['content'], cleaning_set)
                         content = re.sub(greeting_str, "",re.sub(r"\s+", " ", content))
                         content = re.sub(flu_str, "", content)
-                        pat_msg['content'] = content
+                        content = re.sub(colon_regex_1, "", content) #colon_regex_1 is longer, try to get this first
+                        content = re.sub(colon_regex_2, "", content) #Also, will refactor later
+                        content = re.sub(pediatrics_regex_1, "", content)
+                        content = re.sub(pediatrics_regex_2, "", content)
+                        content = re.sub(pediatrics_regex_3, "", content)
+                        content = re.sub(pediatrics_regex_4, "", content)
+                        
+                        pat_msg['content'] = content.strip()
 
                 #Move on if no content left
                 if pat_msg['content'] == '':
