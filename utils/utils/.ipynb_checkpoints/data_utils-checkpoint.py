@@ -6,24 +6,24 @@ import re
 from datetime import datetime
 
 #REGEXES for cleaning patient messages
-post_2020_med_rq_regex = 
-question_regex = 
-questionairre_str =
-greeting_str = 
-revised_greeting_str = 
+post_2020_med_rq_regex = r"(?<=patient comment:).*?(?=preferred pharmacy)"
+question_regex = r"(?<=Answer:).*?(?=Question)"
+questionairre_str = 'Questionnaire'
+greeting_str = r"Dear\s+[A-Za-zÀ-ÿ\s'-]+,\s+Thank you for visiting our practice. If you have any suggestions or feedback from your recent visit or any questions for us please respond to this message and let us know. If this is an urgent issue, please contact the practice directly. We look forward to hearing from you. Sincerely, NYU Langone[A-Za-zÀ-ÿ\s'-]+"
+revised_greeting_str = r"Dear\s+[A-Za-zÀ-ÿ\s'-]+,\s+Thank you for visiting our practice.*(Sincerely, NYU Langone Medical Center| NYU Langone Medical Center)"
 
-imposter_str = 
-flu_str = 
-pre_change_med_rq_regex = 
-post_2020_delimiter = 
-colon_regex_1 = 
-colon_regex_2 = 
-pediatrics_regex_2 = 
-pediatrics_regex_3 = 
-pediatrics_regex_1 = 
-pediatrics_regex_4 = 
+imposter_str = r"This message is being sent by .* on behalf of (\w+) (\w+)"
+flu_str = r"Dear Colleague, NYU Langone Health recently launched its annual influenza immunization program[A-Za-zÀ-ÿ\s'-]+"
+pre_change_med_rq_regex = r"(Comment:).*"
+post_2020_delimiter = "----- Message -----"
+colon_regex_1 = r"Medication Instructions: \? If you are taking any antiplatelet/nonsteroidal.*The preceding information is intended only to provide general information and not as a definitive basis for diagnosis or treatment in any particular case. It is very important that you consult your doctor about your specific condition."
+colon_regex_2 = r"\*Drink the remainder of the solution as instructed above. Do not eat or drink anything after 8AM.*\*Helpful hint! \? Put some Vaseline ointment around the anal area to prevent irritation. Baby wipes help too or Tucks\?pads. 6AM the following morning:"
+pediatrics_regex_2 = r"Talk to your pediatrician regarding the use of this medicine in children. Special care may be needed. What side effects may I notice from receiving this medicine?.*A special MedGuide will be given to you by the pharmacist with each prescription and refill. Be sure to read this information carefully each time."
+pediatrics_regex_3 = r"You may get dizzy. Do not drive, use machinery, or do anything that needs mental alertness until you know how this medicine affects you.*If you have questions about this medicine, talk to your doctor, pharmacist, or health care provider. Copyright\? 2018 Elsevier"
+pediatrics_regex_1 = r"Talk to your pediatrician regarding the use of this medicine in children. Special care may be needed. What side effects may I notice from receiving this medicine?.*Copyright\? 2018 Elsevier"
+pediatrics_regex_4 = r"fast, irregular heartbeat feeling faint or lightheaded, falls fever, chills, or any other sign of infection muscle spasms, tightening, or twitches numbness.*Copyright\? 2018 Elsevier"
 
-change_date = 
+change_date = datetime.fromisoformat('2020-03-19')
 
 def chunk_tasks(tasks, chunk_size):
     for i in range(0, len(tasks), chunk_size):

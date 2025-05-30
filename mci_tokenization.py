@@ -12,9 +12,10 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 tqdm.pandas()
 
-pt_msg_path = "./data/pat_msgs.json"
-mci_phenotype_path = "./data/mci_cohort_dates.csv" 
-demographics_path = 
+#TODO: REMOVE path for release
+pt_msg_path = "/gpfs/data/mankowskilab/NYU_Consult_raw/refined_pat_msgs_new_algo_2_merged_dementia_icds.json"
+mci_phenotype_path = './data/mci_cohort_dates.csv'
+demographics_path = "/gpfs/data/mankowskilab/NYU_Consult_raw/mci_merged_demos.csv"
 
 if not __name__ == "__main__":
     print("mci_tokenization.py is not a module!")
@@ -25,7 +26,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Script requires at least one argument")
     parser.add_argument('--task_type', type=int, help='Task type argument (required)')
     parser.add_argument('--random_state', type=int, default=42, help="Seed for reproducibility.\n Default is 42")
-    parser.add_argument('--method', type=str, default='hierarchical', help="Method type (optional): hierarchical \nDefault is truncation")
+    parser.add_argument('--method', type=str, default='truncation', help="Method type (optional): hierarchical \nDefault is truncation")
     parser.add_argument("--model_name", type=str, default="mental/mental-bert-base-uncased", help="Model name from huggingface. \n Default is mental/mental-bert-base-uncased")
     args = parser.parse_args()
     if len(sys.argv) == 1:
@@ -46,6 +47,7 @@ if __name__ == "__main__":
     df = pd.read_json(pt_msg_path)
     df = df[df.pat_to_doctor_msgs >= 1]
 
+    print(df.shape)
     #2. PHENOTYPE BASE ON TASK
     mci_cohort = pd.read_csv(mci_phenotype_path)
     merged_demos = pd.read_csv(demographics_path)
@@ -53,24 +55,20 @@ if __name__ == "__main__":
     df['label'] = 0
     df['label'] = df.pat_owner_id.isin(mci_set).astype(int)
 
-    #TASK 1: MCI vs NON-MCI
+    #TASK 1: MCI vs NON-MCI (55+)
     #Balance dataset for training (TODO: balance only for training then test on regular distribution)
     if(args.task_type == 1):
-        majority_class = df[df.label == 0]
-        minority_class = df[df.label == 1]
-        majority_class_undersampled = resample(majority_class,
-                                               replace=False,
-                                               n_samples=len(minority_class),
-                                               random_state=args.random_state)
-        balanced_data = pd.concat([majority_class_undersampled, minority_class])
+        #In deployment, only pts who are 50+ would be screened
+        fifty_plus = merged_demos[merged_demos.age >= 50]
+        labeled_df = df[df.pat_owner_id.isin(fifty_plus.pat_owner_id)]
 
         if(args.method == "hierarchical"):
-            balanced_data['all_pt_messages'] = balanced_data['refined_pat_encounters'].progress_apply(lambda x: aggregate_and_process_pt_with_chunks(x))
+            labeled_df['all_pt_messages'] = labeled_df['refined_pat_encounters'].progress_apply(lambda x: aggregate_and_process_pt_with_chunks(x))
         else:
-            balanced_data['all_pt_messages'] = balanced_data['refined_pat_encounters'].progress_apply(lambda x: aggregate_and_process_pt_no_chunks(x))
+            labeled_df['all_pt_messages'] = labeled_df['refined_pat_encounters'].progress_apply(lambda x: aggregate_and_process_pt_no_chunks(x))
 
-        balanced_data.drop(['refined_pat_encounters'],axis=1,inplace=True)
-        labeled_df = balanced_data
+        labeled_df.drop(['refined_pat_encounters'],axis=1,inplace=True)
+        print(labeled_df.shape)
 
     #TASK 2: MCI ONLY, Pre vs Post
     if(args.task_type == 2):

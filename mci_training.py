@@ -79,9 +79,9 @@ def main():
         collate_fn = collate_fn_pooling
         model = BERTGroupClassifier(model_name=MODEL_NAME, num_labels=2)
         # Settings
-        BATCH_SIZE = 2
+        BATCH_SIZE = 4
         NUM_EPOCHS = 3
-        ACCUMULATION_STEPS = 32
+        ACCUMULATION_STEPS = 16
         LEARNING_RATE = 2e-5
         WEIGHT_DECAY = 0.01
 

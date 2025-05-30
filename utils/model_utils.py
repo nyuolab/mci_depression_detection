@@ -2,19 +2,27 @@ import pandas as pd
 import numpy as np
 import torch
 import os
-import re
-
-import json
-
+from tqdm import tqdm
+from nltk import sent_tokenize
 import torch.nn as nn
+from torch.utils.data import DataLoader, Dataset
+from torch.optim import AdamW
+import torch.optim as optim
+
+from transformers import AutoModel, AutoConfig, Trainer, TrainingArguments, AutoTokenizer,AutoModelForSequenceClassification, BertTokenizer, BertForSequenceClassification,get_linear_schedule_with_warmup
+from datasets import Dataset, DatasetDict
 
 from sklearn.metrics import f1_score, accuracy_score,roc_auc_score, recall_score, precision_score
 from sklearn.model_selection import train_test_split
 
-from nltk import sent_tokenize
-from utils.config import tokenizer
-from datetime import datetime
 
+import torch.nn as nn
+import json
+
+import re
+from utils.config import tokenizer
+
+from datetime import datetime
 def collate_fn_concat(batch):
     """
     Collate function for concatenation/trunction method
@@ -53,24 +61,36 @@ def collate_fn_concat(batch):
     
     return padded_batch
 
-def compute_metrics_concat(logits, labels,threshold=0.5):
+def compute_metrics(logits, labels,threshold=0.5):
     # Ensure logits and labels are on the CPU and converted to NumPy arrays for metrics computation
-    logits = logits.detach().cpu().numpy()  # Detach from the graph and move to CPU
+    logits = logits.detach().cpu().numpy()  
     labels = labels.detach().cpu().numpy()
 
     # Apply sigmoid to get probabilities for the positive class (class 1)
     probabilities = torch.softmax(torch.tensor(logits), dim=1)[:, 1].numpy()
-    # Get predicted labels from logits (thresholding at 0.5 for binary classification)
     predictions = (probabilities > threshold).astype(int)
 
     # Compute F1 score, accuracy, ROC AUC, recall, and precision
-    f1 = f1_score(labels, predictions, average='weighted')  # Weighted F1 score
     accuracy = accuracy_score(labels, predictions)
-    auc_roc = roc_auc_score(labels, probabilities)  # For binary classification, use probabilities of class 1
-    recall = recall_score(labels, predictions, average='weighted')
-    precision = precision_score(labels, predictions, average='weighted',zero_division=0)
+    auc_roc = roc_auc_score(labels, probabilities)  
 
-    return {"f1": f1, "accuracy": accuracy, "auroc": auc_roc, "recall": recall, "precision": precision}
+    f1 = f1_score(labels, predictions, average='binary')  
+    recall = recall_score(labels, predictions, average='binary')
+    precision = precision_score(labels, predictions, average='binary',zero_division=0)
+
+    avg_f1 = f1_score(labels, predictions, average='weighted')  
+    avg_recall = recall_score(labels, predictions, average='weighted')
+    avg_precision = precision_score(labels, predictions, average='weighted',zero_division=0)
+
+    return {"f1": f1, 
+            "accuracy": accuracy, 
+            "auroc": auc_roc,
+            "recall": recall,
+            "precision": precision,
+            "avg_f1": avg_f1,
+            "avg_recall": avg_recall,
+            "avg_precision": avg_precision,
+            }
 
 def flatten_list(input_list):
     """
@@ -174,27 +194,6 @@ def collate_fn_pooling(batch):
     padded_labels = torch.stack(label_list)
     padded_batch = {'input_ids': padded_input_ids, 'attention_mask': padded_attention_mask,'labels':padded_labels}
     return padded_batch
-
-
-def compute_metrics_pooling(logits, labels, threshold=0.5):
-    # Ensure logits and labels are on the CPU and converted to NumPy arrays for metrics computation
-    logits = logits.detach().cpu().numpy()  # Detach from the graph and move to CPU
-    labels = labels.detach().cpu().numpy()
-
-    # Apply sigmoid to get probabilities for the positive class (class 1)
-    #TODO: Make both pooling and concat method functions the same (differ only by one line)
-    probabilities = torch.sigmoid(torch.tensor(logits)).numpy()
-    # Get predicted labels from logits (thresholding at 0.5 for binary classification)
-    predictions = (probabilities > threshold).astype(int)
-
-    # Compute F1 score, accuracy, ROC AUC, recall, and precision
-    f1 = f1_score(labels, predictions, average='weighted')  # Weighted F1 score
-    accuracy = accuracy_score(labels, predictions)
-    auc_roc = roc_auc_score(labels, probabilities)  # For binary classification, use probabilities of class 1
-    recall = recall_score(labels, predictions, average='weighted')
-    precision = precision_score(labels, predictions, average='weighted',zero_division=0)
-
-    return {"f1": f1, "accuracy": accuracy, "auroc": auc_roc, "recall": recall, "precision": precision}
 
 def extract_before_and_after(pt_id, enc_list, time_option, time_df):
     """
