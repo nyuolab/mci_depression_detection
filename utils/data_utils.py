@@ -390,22 +390,3 @@ def pad_the_end(a_list, b_list):
         return a_list
     else:
         return a_list
-
-#LEGACY functions, DO NOT USE
-
-def rough_clean_old(raw_msg_str, cleaned_set):
-    processed_input = raw_msg_str.strip().replace('\\',"").replace("'", "").replace('"',"").replace('\n',"").lower().strip() 
-    output = processed_input
-    for subsequence in cleaned_set:
-        if subsequence != processed_input: output = output.replace(subsequence,'[ZOSBOS]')
-            
-    return output.split('[ZOSBOS]',1)[0]
-
-def rough_clean_new(raw_msg_str, cleaned_set,match_cutoff=20):
-    processed_input = raw_msg_str.strip().replace('\\',"").replace("'", "").replace('"',"").replace('\n',"").lower().strip() 
-    output = processed_input
-    for subsequence in cleaned_set:
-        if subsequence != processed_input and len(subsequence) > match_cutoff:
-            output = output.replace(subsequence,'[ZOSBOS]')
-            
-    return output.split('[ZOSBOS]',1)[0]
